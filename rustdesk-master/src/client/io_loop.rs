@@ -1152,6 +1152,15 @@ impl<T: InvokeUiSession> Remote<T> {
         if custom_fps < 5 || custom_fps > 120 {
             custom_fps = 30;
         }
+        // The Harmony control profile can opt out of the queue-driven FPS
+        // reduction. Without this switch the client core may overwrite a
+        // requested 45/60 FPS with 1-15 FPS while the remote screen is
+        // changing, which makes desktop animations look frozen even on a
+        // low-latency LAN.
+        let force_custom_fps = matches!(
+            config::Config::get_option("custom-force-fps").as_str(),
+            "Y" | "y" | "YES" | "yes" | "TRUE" | "true" | "1"
+        );
         let inactive_threshold = 15;
         let max_queue_len = self
             .video_threads
@@ -1204,12 +1213,13 @@ impl<T: InvokeUiSession> Remote<T> {
             None
         };
         let trendings: Vec<_> = displays.iter().map(|k| fps_trending(*k)).collect();
-        let should_decrease = trendings.iter().any(|v| *v == Some(false));
-        let should_increase = !should_decrease && trendings.iter().any(|v| *v == Some(true));
-        if last_auto_fps.is_none() || should_decrease || should_increase {
+        let should_decrease = !force_custom_fps && trendings.iter().any(|v| *v == Some(false));
+        let should_increase = !force_custom_fps && !should_decrease &&
+            trendings.iter().any(|v| *v == Some(true));
+        if force_custom_fps || last_auto_fps.is_none() || should_decrease || should_increase {
             // limited_fps to ensure decoding is faster than encoding
-            let mut auto_fps = limited_fps;
-            if should_decrease && limited_fps < max_queue_len {
+            let mut auto_fps = if force_custom_fps { custom_fps } else { limited_fps };
+            if !force_custom_fps && should_decrease && limited_fps < max_queue_len {
                 auto_fps = limited_fps / 2;
             }
             if auto_fps < 1 {
